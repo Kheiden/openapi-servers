@@ -39,6 +39,7 @@ The wrapper mimics common Ollama API endpoints:
 - **POST `/api/generate`**: Initiates a generation request, sends it to Motion, and awaits a callback.
 - **POST `/api/motion/webhook`**: The inbound callback endpoint that Motion should call with the results.
 - **GET `/api/tags`**: Returns a list of available (mocked) models.
+- **GET `/api/version`**: Returns the mock version of the Ollama server.
 - **GET `/health`**: Check the status of the wrapper and configuration.
 
 ### How it Works

@@ -186,6 +186,13 @@ async def list_models():
         ]
     }
 
+@app.get("/api/version")
+async def get_version():
+    """
+    Returns a mock version of Ollama.
+    """
+    return {"version": "0.1.27"}
+
 @app.post("/ollama/verify")
 @app.get("/ollama/verify")
 async def ollama_verify():
