@@ -1,0 +1,8 @@
+services:
+  server:
+    build:
+      context: .
+    environment:
+      - MOTION_WEBHOOK_URL=${MOTION_WEBHOOK_URL}
+    ports:
+      - "8000:8000"
