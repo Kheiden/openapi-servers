@@ -1,15 +1,17 @@
 import os
-import requests
-from fastapi import FastAPI, HTTPException, Request
+import httpx
+import asyncio
+import uuid
+import time
+from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
-import time
 
 app = FastAPI(
     title="Motion Ollama Wrapper",
-    version="1.0.0",
-    description="A lightweight wrapper that converts incoming Ollama model API requests into external Motion webhook calls and returns the response in Ollama format.",
+    version="1.1.0",
+    description="A lightweight wrapper that converts incoming Ollama model API requests into external Motion webhook calls and awaits an inbound callback before returning the result in Ollama format.",
 )
 
 origins = ["*"]
@@ -24,6 +26,13 @@ app.add_middleware(
 
 # Configuration
 MOTION_WEBHOOK_URL = os.getenv("MOTION_WEBHOOK_URL")
+# For local testing, we might want a PUBLIC_URL if we're behind a proxy,
+# but for this wrapper, we just assume Motion knows how to call us back.
+CALLBACK_BASE_URL = os.getenv("CALLBACK_BASE_URL", "http://localhost:8000")
+
+# In-memory store for pending requests
+# Map task_id -> asyncio.Future
+pending_requests: Dict[str, asyncio.Future] = {}
 
 # -------------------------------
 # Pydantic models for Ollama
@@ -46,26 +55,61 @@ class GenerateRequest(BaseModel):
     options: Optional[Dict[str, Any]] = None
 
 # -------------------------------
+# Motion Webhook Callback Model
+# -------------------------------
+
+class MotionWebhookPayload(BaseModel):
+    task_id: str
+    result: Union[str, Dict[str, Any]]
+
+# -------------------------------
 # Helper function
 # -------------------------------
 
-def forward_to_motion(payload: Dict[str, Any]) -> str:
+async def wait_for_motion_response(ollama_payload: Dict[str, Any]) -> str:
     if not MOTION_WEBHOOK_URL:
         raise HTTPException(status_code=500, detail="MOTION_WEBHOOK_URL environment variable is not set.")
     
+    task_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    
+    pending_requests[task_id] = future
+    
+    # Enrich the payload with task_id and a potential callback URL
+    motion_payload = {
+        **ollama_payload,
+        "task_id": task_id,
+        "callback_url": f"{CALLBACK_BASE_URL}/api/motion/webhook"
+    }
+    
     try:
-        # Blocking external HTTP call
-        response = requests.post(MOTION_WEBHOOK_URL, json=payload, timeout=300)
-        response.raise_for_status()
+        # Step 1: Initial call to Motion (blocking-style wait for sending, but async loop continues)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(MOTION_WEBHOOK_URL, json=motion_payload, timeout=30)
+            response.raise_for_status()
         
-        # The user said: "respond to the original inbound API call with the properly formatted data from the body of the inbound HTTP call."
-        # If the response is JSON, we might want to return it as a formatted string or just the text.
-        # Most webhooks will return text or a specific JSON field. 
-        # For maximum flexibility, we'll return the raw text of the response.
-        return response.text
-        
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Error connecting to Motion webhook: {e}")
+        # Step 2: Await the inbound webhook (blocking the current request but not the event loop)
+        # We'll wait up to 60 seconds for the callback
+        try:
+            result_data = await asyncio.wait_for(future, timeout=60.0)
+            # The result_data is what Motion sent to our callback endpoint
+            if isinstance(result_data, dict):
+                # If Motion returned a JSON object, maybe it has a 'content' field? 
+                # Otherwise, return the whole thing as a string.
+                return result_data.get("content", str(result_data))
+            return str(result_data)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail=f"Timed out waiting for Motion callback for task {task_id}")
+            
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Motion initial request failed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+    finally:
+        # Always clean up the pending request map
+        if task_id in pending_requests:
+            del pending_requests[task_id]
 
 # -------------------------------
 # Routes
@@ -74,11 +118,9 @@ def forward_to_motion(payload: Dict[str, Any]) -> str:
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    Handles /api/chat requests by forwarding the messages to the Motion webhook
-    and returning the result in Ollama format.
+    Handles /api/chat requests by initializing the Motion webhook and awaiting the callback.
     """
-    # For a chat request, we pass the messages to the webhook.
-    response_content = forward_to_motion(request.dict())
+    response_content = await wait_for_motion_response(request.dict())
     
     return {
         "model": request.model,
@@ -93,11 +135,9 @@ async def chat_endpoint(request: ChatRequest):
 @app.post("/api/generate")
 async def generate_endpoint(request: GenerateRequest):
     """
-    Handles /api/generate requests by forwarding the prompt to the Motion webhook
-    and returning the result in Ollama format.
+    Handles /api/generate requests by initializing the Motion webhook and awaiting the callback.
     """
-    # For a generate request, we pass the prompt to the webhook.
-    response_content = forward_to_motion(request.dict())
+    response_content = await wait_for_motion_response(request.dict())
     
     return {
         "model": request.model,
@@ -106,11 +146,34 @@ async def generate_endpoint(request: GenerateRequest):
         "done": True
     }
 
+@app.post("/api/motion/webhook")
+async def motion_callback_endpoint(
+    task_id: Optional[str] = None,
+    payload: Any = Body(...)
+):
+    """
+    Endpoint for Motion to call back with the results.
+    Expected payload should contain task_id and result, or task_id as query param.
+    """
+    # Try to find task_id in payload if not in query param
+    if not task_id and isinstance(payload, dict):
+        task_id = payload.get("task_id")
+    
+    if not task_id or task_id not in pending_requests:
+        return {"status": "ignored", "reason": "No pending request found for this task_id."}
+    
+    # The result data could be the whole payload or a specific 'result' field
+    result_data = payload.get("result", payload) if isinstance(payload, dict) else payload
+    
+    # Resolve the future, which unblocks the original request
+    if not pending_requests[task_id].done():
+        pending_requests[task_id].set_result(result_data)
+        return {"status": "success", "message": f"Task {task_id} unblocked."}
+    else:
+        return {"status": "ignored", "reason": "Request already resolved or timed out."}
+
 @app.get("/api/tags")
 async def list_models():
-    """
-    Returns a mock list of models to satisfy clients that check available models.
-    """
     return {
         "models": [
             {
@@ -124,4 +187,8 @@ async def list_models():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "webhook_configured": bool(MOTION_WEBHOOK_URL)}
+    return {
+        "status": "healthy",
+        "webhook_configured": bool(MOTION_WEBHOOK_URL),
+        "pending_requests_count": len(pending_requests)
+    }

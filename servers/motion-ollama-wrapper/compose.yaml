@@ -4,5 +4,6 @@ services:
       context: .
     environment:
       - MOTION_WEBHOOK_URL=${MOTION_WEBHOOK_URL}
+      - CALLBACK_BASE_URL=${CALLBACK_BASE_URL}
     ports:
       - "8000:8000"

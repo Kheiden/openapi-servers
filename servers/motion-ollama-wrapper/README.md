@@ -35,10 +35,20 @@ docker compose up
 
 The wrapper mimics common Ollama API endpoints:
 
-- **POST `/api/chat`**: Forwards chat messages to the webhook.
-- **POST `/api/generate`**: Forwards a single prompt to the webhook.
+- **POST `/api/chat`**: Initiates a chat request, sends it to Motion, and awaits a callback.
+- **POST `/api/generate`**: Initiates a generation request, sends it to Motion, and awaits a callback.
+- **POST `/api/motion/webhook`**: The inbound callback endpoint that Motion should call with the results.
 - **GET `/api/tags`**: Returns a list of available (mocked) models.
 - **GET `/health`**: Check the status of the wrapper and configuration.
+
+### How it Works
+
+1.  A client sends a request to `/api/chat`.
+2.  The wrapper generates a unique `task_id` and registers a pending request.
+3.  The wrapper sends the request to Motion at `MOTION_WEBHOOK_URL`, including the `task_id` and `callback_url` in the JSON payload.
+4.  The wrapper `awaits` the response (with a 60s timeout).
+5.  Motion processes the request and POSTs the result back to the wrapper's `/api/motion/webhook` endpoint.
+6.  The wrapper matches the `task_id`, resolves the pending request, and returns the data to the original client in Ollama format.
 
 ### Example Request (Chat)
 
@@ -53,5 +63,3 @@ curl http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{
   ]
 }'
 ```
-
-The wrapper will take the response body from the Motion webhook and wrap it in a standard Ollama chat response JSON.
