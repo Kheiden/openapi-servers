@@ -93,11 +93,10 @@ async def wait_for_motion_response(request: Request, ollama_payload: Dict[str, A
     pending_requests[task_id] = future
     
     # Enrich the payload with task_id and a potential callback URL
-    # Include the task_id in the callback URL query parameter for more reliable matching
     motion_payload = {
         **ollama_payload,
         "task_id": task_id,
-        "callback_url": f"{CALLBACK_BASE_URL}/api/motion/webhook?task_id={task_id}"
+        "callback_url": f"{CALLBACK_BASE_URL}/api/motion/webhook"
     }
     
     try:
