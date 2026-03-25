@@ -173,6 +173,7 @@ async def motion_callback_endpoint(
         return {"status": "ignored", "reason": "Request already resolved or timed out."}
 
 @app.get("/api/tags")
+@app.get("/api/models")
 async def list_models():
     return {
         "models": [
@@ -184,6 +185,14 @@ async def list_models():
             }
         ]
     }
+
+@app.post("/ollama/verify")
+@app.get("/ollama/verify")
+async def ollama_verify():
+    """
+    Verification endpoint for Open WebUI or other Ollama clients.
+    """
+    return {"status": True}
 
 @app.get("/health")
 def health_check():
