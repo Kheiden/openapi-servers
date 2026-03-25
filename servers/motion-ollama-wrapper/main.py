@@ -263,6 +263,30 @@ async def get_version():
     """
     return {"version": "0.1.27"}
 
+@app.get("/api/ps")
+async def get_running_models():
+    """
+    Returns the list of 'running' models.
+    """
+    return {
+        "models": [
+            {
+                "name": "motion-wrapper:latest",
+                "model": "motion-wrapper:latest",
+                "size": 0,
+                "digest": "motion-wrapper-digest",
+                "details": {
+                    "format": "gguf",
+                    "family": "llama",
+                    "families": ["llama"],
+                    "parameter_size": "7B",
+                    "quantization_level": "Q4_K_M"
+                },
+                "expires_at": "2099-12-31T23:59:59Z"
+            }
+        ]
+    }
+
 @app.post("/ollama/verify")
 @app.get("/ollama/verify")
 async def ollama_verify():
