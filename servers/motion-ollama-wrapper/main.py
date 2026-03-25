@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any, Union
 
 app = FastAPI(
     title="Motion Ollama Wrapper",
-    version="1.1.0",
+    version="1.2.0",
     description="A lightweight wrapper that converts incoming Ollama model API requests into external Motion webhook calls and awaits an inbound callback before returning the result in Ollama format.",
 )
 
@@ -115,6 +115,13 @@ async def wait_for_motion_response(ollama_payload: Dict[str, Any]) -> str:
 # Routes
 # -------------------------------
 
+@app.get("/")
+async def root():
+    """
+    Root endpoint for health checking by some clients.
+    """
+    return "Ollama is running"
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
@@ -175,13 +182,41 @@ async def motion_callback_endpoint(
 @app.get("/api/tags")
 @app.get("/api/models")
 async def list_models():
+    """
+    Returns the list of models in exact Ollama schema.
+    """
     return {
         "models": [
             {
-                "name": "motion-wrapper",
+                "name": "motion-wrapper:latest",
+                "model": "motion-wrapper:latest",
                 "modified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "size": 0,
-                "digest": "motion-wrapper-digest"
+                "digest": "motion-wrapper-digest",
+                "details": {
+                    "format": "gguf",
+                    "family": "llama",
+                    "families": ["llama"],
+                    "parameter_size": "7B",
+                    "quantization_level": "Q4_K_M"
+                }
+            }
+        ]
+    }
+
+@app.get("/v1/models")
+async def list_v1_models():
+    """
+    OpenAI-compatible models list.
+    """
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "motion-wrapper:latest",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "motion"
             }
         ]
     }
