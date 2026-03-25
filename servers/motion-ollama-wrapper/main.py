@@ -3,6 +3,7 @@ import httpx
 import asyncio
 import uuid
 import time
+import json
 import logging
 import traceback
 from fastapi import FastAPI, HTTPException, Request, Body
@@ -92,10 +93,11 @@ async def wait_for_motion_response(request: Request, ollama_payload: Dict[str, A
     pending_requests[task_id] = future
     
     # Enrich the payload with task_id and a potential callback URL
+    # Include the task_id in the callback URL query parameter for more reliable matching
     motion_payload = {
         **ollama_payload,
         "task_id": task_id,
-        "callback_url": f"{CALLBACK_BASE_URL}/api/motion/webhook"
+        "callback_url": f"{CALLBACK_BASE_URL}/api/motion/webhook?task_id={task_id}"
     }
     
     try:
@@ -118,9 +120,12 @@ async def wait_for_motion_response(request: Request, ollama_payload: Dict[str, A
             
             # The result_data is what Motion sent to our callback endpoint
             if isinstance(result_data, dict):
-                # If Motion returned a JSON object, maybe it has a 'content' field? 
-                # Otherwise, return the whole thing as a string.
-                return result_data.get("content", str(result_data))
+                # If Motion returned a JSON object, check for 'content'
+                if "content" in result_data:
+                    return str(result_data["content"])
+                # For objects like {'follow_ups': [...]} or {'title': '...'},
+                # return a valid JSON string so the client can parse it.
+                return json.dumps(result_data)
             return str(result_data)
         except asyncio.TimeoutError:
             logger.error(f"Timed out waiting for Motion callback for task {task_id}")
