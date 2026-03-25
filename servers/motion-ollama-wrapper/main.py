@@ -20,7 +20,7 @@ logger = logging.getLogger("motion-ollama-wrapper")
 
 app = FastAPI(
     title="Motion Ollama Wrapper",
-    version="1.2.1",
+    version="1.2.2",
     description="A lightweight wrapper that converts incoming Ollama model API requests into external Motion webhook calls and awaits an inbound callback before returning the result in Ollama format.",
 )
 
@@ -82,7 +82,8 @@ async def wait_for_motion_response(request: Request, ollama_payload: Dict[str, A
         raise HTTPException(status_code=500, detail="MOTION_WEBHOOK_URL environment variable is not set.")
     
     task_id = str(uuid.uuid4())
-    logger.info(f"Starting task {task_id} for payload: {ollama_payload}")
+    logger.info(f"Starting task {task_id}")
+    logger.info(f"Inbound payload: {ollama_payload}")
     logger.info(f"Inbound Request Headers: {dict(request.headers)}")
 
     loop = asyncio.get_running_loop()
@@ -100,16 +101,19 @@ async def wait_for_motion_response(request: Request, ollama_payload: Dict[str, A
     try:
         # Step 1: Initial call to Motion (blocking-style wait for sending, but async loop continues)
         logger.info(f"Sending initial request to Motion: {MOTION_WEBHOOK_URL} for task {task_id}")
+        logger.info(f"Outbound payload to Motion: {motion_payload}")
+        
         async with httpx.AsyncClient() as client:
-            response = await client.post(MOTION_WEBHOOK_URL, json=motion_payload, timeout=30)
+            response = await client.post(MOTION_WEBHOOK_URL, json=motion_payload, timeout=300)
+            logger.info(f"Outbound Headers sent to Motion: {dict(response.request.headers)}")
             logger.info(f"Motion initial response status: {response.status_code}")
             response.raise_for_status()
         
         # Step 2: Await the inbound webhook (blocking the current request but not the event loop)
-        # We'll wait up to 60 seconds for the callback
-        logger.info(f"Awaiting callback for task {task_id}...")
+        # We'll wait up to 300 seconds for the callback
+        logger.info(f"Awaiting callback for task {task_id} (timeout: 300s)...")
         try:
-            result_data = await asyncio.wait_for(future, timeout=60.0)
+            result_data = await asyncio.wait_for(future, timeout=300.0)
             logger.info(f"Received result for task {task_id}")
             
             # The result_data is what Motion sent to our callback endpoint
@@ -124,6 +128,7 @@ async def wait_for_motion_response(request: Request, ollama_payload: Dict[str, A
             
     except httpx.HTTPStatusError as e:
         logger.error(f"Motion initial request failed with status {e.response.status_code}: {e.response.text}")
+        logger.error(f"Request Headers sent to Motion: {dict(e.request.headers)}")
         raise HTTPException(status_code=502, detail=f"Motion initial request failed: {e}")
     except Exception as e:
         logger.error(f"Internal error during task {task_id}: {str(e)}")
